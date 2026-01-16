@@ -2,8 +2,8 @@
 import sys
 import warnings
 from datetime import datetime
-from src.crew import BoardPanelCrew
-from src.models import StartupInput
+from .crew import BoardPanelCrew
+from .models import StartupInput
 
 warnings.filterwarnings("ignore", category=SyntaxWarning, module="pysbd")
 
@@ -74,7 +74,7 @@ def run(startup_data: StartupInput):
 
 def run_example():
     """Run with example data for testing."""
-    from src.models import (
+    from .models import (
         ProductTechnology,
         MarketingGrowth,
         TeamOrganization,

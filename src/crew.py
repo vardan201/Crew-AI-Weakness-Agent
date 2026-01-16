@@ -20,11 +20,12 @@ class BoardPanelCrew:
         if not groq_api_key:
             raise ValueError("GROQ_API_KEY not found")
         
+        # Set environment variables for LiteLLM
         os.environ['GROQ_API_KEY'] = groq_api_key
         
+        # Initialize LLM with proper LiteLLM configuration
         self.llm = LLM(
             model=f"groq/{groq_model}",
-            api_key=groq_api_key,
             temperature=0.7,
             max_tokens=2048
         )

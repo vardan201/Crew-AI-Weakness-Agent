@@ -15,9 +15,9 @@ import logging
 logging.getLogger("litellm").setLevel(logging.ERROR)
 warnings.filterwarnings("ignore", message=".*apscheduler.*")
 
-from src.models import StartupInput, AgentWeaknessOutput, WeaknessAnalysisResult
-from src.main import run, prepare_inputs
-from src.crew import BoardPanelCrew
+from .models import StartupInput, AgentWeaknessOutput, WeaknessAnalysisResult
+from .main import run, prepare_inputs
+from .crew import BoardPanelCrew
 
 app = FastAPI(
     title="Board Panel - Weaknesses Analysis API",
@@ -62,13 +62,22 @@ def check_rate_limit():
 
 
 def extract_weaknesses_from_json(output_text: str) -> list:
-    """Extract weaknesses list from JSON output."""
+    """Extract weaknesses list from JSON output with robust parsing."""
     try:
-        # Clean the output - remove any markdown code blocks
+        # Clean the output - remove markdown code blocks
         cleaned = output_text.strip()
-        if cleaned.startswith('```'):
-            lines = cleaned.split('\n')
-            cleaned = '\n'.join(lines[1:-1]) if len(lines) > 2 else cleaned
+        
+        # Remove markdown code blocks (```json ... ``` or ``` ... ```)
+        if '```' in cleaned:
+            # Try to extract content between code blocks
+            parts = cleaned.split('```')
+            for part in parts:
+                part = part.strip()
+                # Skip language identifiers like 'json'
+                if part and not part.lower() in ['json', 'javascript', 'js']:
+                    if '{' in part:
+                        cleaned = part
+                        break
         
         # Find the JSON object
         if '{' in cleaned:
@@ -76,16 +85,51 @@ def extract_weaknesses_from_json(output_text: str) -> list:
             end_idx = cleaned.rfind('}') + 1
             if start_idx != -1 and end_idx > start_idx:
                 json_str = cleaned[start_idx:end_idx]
-                data = json.loads(json_str)
+                
+                # Try to parse JSON
+                try:
+                    data = json.loads(json_str)
+                except json.JSONDecodeError:
+                    # Try fixing common JSON issues
+                    json_str = json_str.replace("'", '"')  # Replace single quotes
+                    json_str = json_str.replace('\n', ' ')  # Remove newlines that break JSON
+                    data = json.loads(json_str)
                 
                 # Extract weaknesses
                 if 'weaknesses' in data and isinstance(data['weaknesses'], list):
                     return data['weaknesses']
+                    
+                # Sometimes the agent returns nested structure
+                if 'result' in data and 'weaknesses' in data['result']:
+                    return data['result']['weaknesses']
         
+        # Fallback: Try to extract numbered/bulleted list if JSON parsing fails
+        print(f"⚠ No valid JSON found. Attempting fallback extraction...")
+        weaknesses = []
+        lines = output_text.split('\n')
+        for line in lines:
+            line = line.strip()
+            # Look for numbered items (1., 2., etc.) or bullet points (-, *, etc.)
+            if line and (line[0].isdigit() or line.startswith(('-', '*', '•'))):
+                # Remove numbering/bullets
+                clean_line = line.lstrip('0123456789.-*• ').strip()
+                if len(clean_line) > 20:  # Only substantial weaknesses
+                    weaknesses.append(clean_line)
+        
+        if weaknesses:
+            print(f"✅ Fallback extraction found {len(weaknesses)} weaknesses")
+            return weaknesses[:5]  # Max 5 weaknesses
+        
+        print(f"❌ No weaknesses could be extracted. Preview: {output_text[:200]}...")
         return []
     
     except (json.JSONDecodeError, KeyError) as e:
-        print(f"Error parsing JSON: {e}")
+        print(f"❌ Error parsing JSON: {e}")
+        print(f"Output text preview: {output_text[:300]}...")
+        return []
+    except Exception as e:
+        print(f"❌ Unexpected error in extract_weaknesses_from_json: {e}")
+        print(f"Output text: {output_text[:300]}...")
         return []
 
 
@@ -131,13 +175,9 @@ def run_analysis(analysis_id: str, startup_data: StartupInput):
         # Initialize result structure
         result = WeaknessAnalysisResult()
         
-        # The tasks are executed in this order (from crew.py):
-        # 1. marketing_analysis_task
-        # 2. tech_analysis_task
-        # 3. org_hr_analysis_task
-        # 4. competitive_analysis_task
-        # 5. finance_analysis_task
-        
+        # The tasks are executed in this order (from crew.py @crew decorator):
+        # Order is determined by self.tasks which uses @task decorated methods
+        # in the order they're defined in the class
         task_order = [
             ("marketing", "Marketing Advisor"),
             ("tech", "Tech Lead"),
@@ -145,6 +185,12 @@ def run_analysis(analysis_id: str, startup_data: StartupInput):
             ("competitive", "Competitive Analyst"),
             ("finance", "Finance Advisor")
         ]
+        
+        print(f"Expected task order: {[name for _, name in task_order]}")
+        print(f"Number of tasks received: {len(tasks_output)}")
+        
+        if len(tasks_output) != len(task_order):
+            print(f"⚠️ WARNING: Expected {len(task_order)} tasks but got {len(tasks_output)}!")
         
         for idx, task_output in enumerate(tasks_output):
             # Get the raw output text
@@ -154,10 +200,14 @@ def run_analysis(analysis_id: str, startup_data: StartupInput):
                 output_text = str(task_output)
             
             print(f"\n--- Task {idx + 1} ---")
-            print(f"Output preview: {output_text[:200]}...")
+            print(f"Output length: {len(output_text)} characters")
+            print(f"Output preview: {output_text[:500]}...")
+            if len(output_text) > 500:
+                print(f"Output ending: ...{output_text[-200:]}")
             
             # Extract weaknesses from JSON
             weaknesses = extract_weaknesses_from_json(output_text)
+            print(f"Extracted {len(weaknesses)} weaknesses from this task")
             
             # Map to correct category based on task order
             if idx < len(task_order):
