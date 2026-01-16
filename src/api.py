@@ -64,12 +64,14 @@ def check_rate_limit():
 def extract_weaknesses_from_json(output_text: str) -> list:
     """Extract weaknesses list from JSON output with robust parsing."""
     try:
+        print(f"🔍 Attempting to parse output (length: {len(output_text)} chars)")
+        print(f"Preview: {output_text[:200]}...")
+        
         # Clean the output - remove markdown code blocks
         cleaned = output_text.strip()
         
         # Remove markdown code blocks (```json ... ``` or ``` ... ```)
         if '```' in cleaned:
-            # Try to extract content between code blocks
             parts = cleaned.split('```')
             for part in parts:
                 part = part.strip()
@@ -89,22 +91,29 @@ def extract_weaknesses_from_json(output_text: str) -> list:
                 # Try to parse JSON
                 try:
                     data = json.loads(json_str)
-                except json.JSONDecodeError:
+                    print(f"✅ Successfully parsed JSON: {json.dumps(data, indent=2)[:300]}...")
+                except json.JSONDecodeError as e:
+                    print(f"⚠️ JSON parse error: {e}. Attempting fix...")
                     # Try fixing common JSON issues
                     json_str = json_str.replace("'", '"')  # Replace single quotes
                     json_str = json_str.replace('\n', ' ')  # Remove newlines that break JSON
                     data = json.loads(json_str)
+                    print(f"✅ Fixed and parsed JSON successfully")
                 
                 # Extract weaknesses
                 if 'weaknesses' in data and isinstance(data['weaknesses'], list):
-                    return data['weaknesses']
+                    weaknesses = data['weaknesses']
+                    print(f"✅ Found {len(weaknesses)} weaknesses in 'weaknesses' field")
+                    return weaknesses
                     
                 # Sometimes the agent returns nested structure
                 if 'result' in data and 'weaknesses' in data['result']:
-                    return data['result']['weaknesses']
+                    weaknesses = data['result']['weaknesses']
+                    print(f"✅ Found {len(weaknesses)} weaknesses in 'result.weaknesses' field")
+                    return weaknesses
         
         # Fallback: Try to extract numbered/bulleted list if JSON parsing fails
-        print(f"⚠ No valid JSON found. Attempting fallback extraction...")
+        print(f"⚠️ No valid JSON found. Attempting fallback extraction...")
         weaknesses = []
         lines = output_text.split('\n')
         for line in lines:
@@ -120,16 +129,17 @@ def extract_weaknesses_from_json(output_text: str) -> list:
             print(f"✅ Fallback extraction found {len(weaknesses)} weaknesses")
             return weaknesses[:5]  # Max 5 weaknesses
         
-        print(f"❌ No weaknesses could be extracted. Preview: {output_text[:200]}...")
+        print(f"❌ No weaknesses could be extracted")
         return []
     
     except (json.JSONDecodeError, KeyError) as e:
         print(f"❌ Error parsing JSON: {e}")
-        print(f"Output text preview: {output_text[:300]}...")
+        print(f"Output text: {output_text[:500]}...")
         return []
     except Exception as e:
         print(f"❌ Unexpected error in extract_weaknesses_from_json: {e}")
-        print(f"Output text: {output_text[:300]}...")
+        import traceback
+        traceback.print_exc()
         return []
 
 
@@ -170,14 +180,14 @@ def run_analysis(analysis_id: str, startup_data: StartupInput):
         else:
             tasks_output = []
         
-        print(f"\n=== Processing {len(tasks_output)} task outputs ===")
+        print(f"\n{'='*80}")
+        print(f"Processing {len(tasks_output)} task outputs")
+        print(f"{'='*80}")
         
         # Initialize result structure
         result = WeaknessAnalysisResult()
         
-        # The tasks are executed in this order (from crew.py @crew decorator):
-        # Order is determined by self.tasks which uses @task decorated methods
-        # in the order they're defined in the class
+        # Task order matches the @task method definition order in crew.py
         task_order = [
             ("marketing", "Marketing Advisor"),
             ("tech", "Tech Lead"),
@@ -186,28 +196,48 @@ def run_analysis(analysis_id: str, startup_data: StartupInput):
             ("finance", "Finance Advisor")
         ]
         
-        print(f"Expected task order: {[name for _, name in task_order]}")
-        print(f"Number of tasks received: {len(tasks_output)}")
-        
         if len(tasks_output) != len(task_order):
             print(f"⚠️ WARNING: Expected {len(task_order)} tasks but got {len(tasks_output)}!")
         
         for idx, task_output in enumerate(tasks_output):
-            # Get the raw output text
-            if hasattr(task_output, 'raw'):
-                output_text = str(task_output.raw)
-            else:
-                output_text = str(task_output)
+            print(f"\n{'─'*80}")
+            print(f"Task {idx + 1}/{len(tasks_output)}")
+            print(f"{'─'*80}")
             
-            print(f"\n--- Task {idx + 1} ---")
-            print(f"Output length: {len(output_text)} characters")
-            print(f"Output preview: {output_text[:500]}...")
-            if len(output_text) > 500:
-                print(f"Output ending: ...{output_text[-200:]}")
+            # Try multiple ways to get the output
+            weaknesses = []
             
-            # Extract weaknesses from JSON
-            weaknesses = extract_weaknesses_from_json(output_text)
-            print(f"Extracted {len(weaknesses)} weaknesses from this task")
+            # Method 1: Check if output_json worked (task has pydantic attribute)
+            if hasattr(task_output, 'pydantic') and task_output.pydantic:
+                print(f"✅ Found structured Pydantic output")
+                try:
+                    pydantic_obj = task_output.pydantic
+                    if hasattr(pydantic_obj, 'weaknesses'):
+                        weaknesses = pydantic_obj.weaknesses
+                        print(f"✅ Extracted {len(weaknesses)} weaknesses from Pydantic object")
+                except Exception as e:
+                    print(f"⚠️ Error extracting from Pydantic: {e}")
+            
+            # Method 2: Check json_dict attribute
+            if not weaknesses and hasattr(task_output, 'json_dict') and task_output.json_dict:
+                print(f"✅ Found json_dict output")
+                try:
+                    json_dict = task_output.json_dict
+                    if 'weaknesses' in json_dict:
+                        weaknesses = json_dict['weaknesses']
+                        print(f"✅ Extracted {len(weaknesses)} weaknesses from json_dict")
+                except Exception as e:
+                    print(f"⚠️ Error extracting from json_dict: {e}")
+            
+            # Method 3: Parse raw output
+            if not weaknesses:
+                if hasattr(task_output, 'raw'):
+                    output_text = str(task_output.raw)
+                else:
+                    output_text = str(task_output)
+                
+                print(f"ℹ️ Attempting to parse raw output ({len(output_text)} chars)")
+                weaknesses = extract_weaknesses_from_json(output_text)
             
             # Map to correct category based on task order
             if idx < len(task_order):
@@ -215,28 +245,31 @@ def run_analysis(analysis_id: str, startup_data: StartupInput):
                 
                 if category == "marketing":
                     result.marketing_weaknesses = weaknesses
-                    print(f"✓ Marketing: {len(weaknesses)} weaknesses")
+                    print(f"✅ Marketing: {len(weaknesses)} weaknesses assigned")
                 elif category == "tech":
                     result.tech_weaknesses = weaknesses
-                    print(f"✓ Tech: {len(weaknesses)} weaknesses")
+                    print(f"✅ Tech: {len(weaknesses)} weaknesses assigned")
                 elif category == "org_hr":
                     result.org_hr_weaknesses = weaknesses
-                    print(f"✓ Org/HR: {len(weaknesses)} weaknesses")
+                    print(f"✅ Org/HR: {len(weaknesses)} weaknesses assigned")
                 elif category == "competitive":
                     result.competitive_weaknesses = weaknesses
-                    print(f"✓ Competitive: {len(weaknesses)} weaknesses")
+                    print(f"✅ Competitive: {len(weaknesses)} weaknesses assigned")
                 elif category == "finance":
                     result.finance_weaknesses = weaknesses
-                    print(f"✓ Finance: {len(weaknesses)} weaknesses")
+                    print(f"✅ Finance: {len(weaknesses)} weaknesses assigned")
             else:
-                print(f"⚠ Unexpected extra task at index {idx}")
+                print(f"⚠️ Unexpected extra task at index {idx}")
         
-        print("\n=== Final Result Summary ===")
+        print(f"\n{'='*80}")
+        print(f"FINAL RESULT SUMMARY")
+        print(f"{'='*80}")
         print(f"Marketing: {len(result.marketing_weaknesses)} weaknesses")
         print(f"Tech: {len(result.tech_weaknesses)} weaknesses")
         print(f"Org/HR: {len(result.org_hr_weaknesses)} weaknesses")
         print(f"Competitive: {len(result.competitive_weaknesses)} weaknesses")
         print(f"Finance: {len(result.finance_weaknesses)} weaknesses")
+        print(f"{'='*80}\n")
         
         # Store validated result
         analysis_results[analysis_id]["status"] = "completed"
@@ -244,9 +277,14 @@ def run_analysis(analysis_id: str, startup_data: StartupInput):
         analysis_results[analysis_id]["completed_at"] = datetime.now().isoformat()
         
     except Exception as e:
-        print(f"\n!!! Analysis failed with error: {e}")
+        print(f"\n{'='*80}")
+        print(f"ANALYSIS FAILED")
+        print(f"{'='*80}")
+        print(f"Error: {e}")
         import traceback
         traceback.print_exc()
+        print(f"{'='*80}\n")
+        
         analysis_results[analysis_id]["status"] = "failed"
         analysis_results[analysis_id]["error"] = str(e)
         analysis_results[analysis_id]["failed_at"] = datetime.now().isoformat()

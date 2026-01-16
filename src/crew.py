@@ -74,37 +74,47 @@ class BoardPanelCrew:
 
     @task
     def marketing_analysis_task(self) -> Task:
+        from .models import AgentWeaknessOutput
         return Task(
             config=self.tasks_config['marketing_analysis_task'],
-            agent=self.marketing_advisor()
+            agent=self.marketing_advisor(),
+            output_json=AgentWeaknessOutput
         )
 
     @task
     def tech_analysis_task(self) -> Task:
+        from .models import AgentWeaknessOutput
         return Task(
             config=self.tasks_config['tech_analysis_task'],
-            agent=self.tech_lead()
+            agent=self.tech_lead(),
+            output_json=AgentWeaknessOutput
         )
 
     @task
     def org_hr_analysis_task(self) -> Task:
+        from .models import AgentWeaknessOutput
         return Task(
             config=self.tasks_config['org_hr_analysis_task'],
-            agent=self.org_hr_strategist()
+            agent=self.org_hr_strategist(),
+            output_json=AgentWeaknessOutput
         )
 
     @task
     def competitive_analysis_task(self) -> Task:
+        from .models import AgentWeaknessOutput
         return Task(
             config=self.tasks_config['competitive_analysis_task'],
-            agent=self.competitive_analyst()
+            agent=self.competitive_analyst(),
+            output_json=AgentWeaknessOutput
         )
 
     @task
     def finance_analysis_task(self) -> Task:
+        from .models import AgentWeaknessOutput
         return Task(
             config=self.tasks_config['finance_analysis_task'],
-            agent=self.finance_advisor()
+            agent=self.finance_advisor(),
+            output_json=AgentWeaknessOutput
         )
 
     @crew
