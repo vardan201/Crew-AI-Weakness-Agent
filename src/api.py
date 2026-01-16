@@ -15,9 +15,9 @@ import logging
 logging.getLogger("litellm").setLevel(logging.ERROR)
 warnings.filterwarnings("ignore", message=".*apscheduler.*")
 
-from models import StartupInput, AgentWeaknessOutput, WeaknessAnalysisResult
-from main import run, prepare_inputs
-from crew import BoardPanelCrew
+from src.models import StartupInput, AgentWeaknessOutput, WeaknessAnalysisResult
+from src.main import run, prepare_inputs
+from src.crew import BoardPanelCrew
 
 app = FastAPI(
     title="Board Panel - Weaknesses Analysis API",
