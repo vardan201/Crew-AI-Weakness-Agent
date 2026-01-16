@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Dict
 import json
 import time
+import re
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -61,24 +62,39 @@ def check_rate_limit():
     return True
 
 
+def fix_double_braces(text: str) -> str:
+    """Fix double curly braces that LLMs sometimes output."""
+    # Only fix if it starts with {{ and ends with }}
+    if text.strip().startswith('{{') and text.strip().endswith('}}'):
+        print("⚠️ Fixing double curly braces...")
+        # Replace only the outer-most double braces
+        text = re.sub(r'^\s*\{\{', '{', text)
+        text = re.sub(r'\}\}\s*$', '}', text)
+    return text
+
+
 def extract_weaknesses_from_json(output_text: str) -> list:
     """Extract weaknesses list from JSON output with robust parsing."""
     try:
         print(f"🔍 Attempting to parse output (length: {len(output_text)} chars)")
         print(f"Preview: {output_text[:200]}...")
         
-        # Clean the output - remove markdown code blocks
+        # Clean the output
         cleaned = output_text.strip()
+        
+        # Fix double curly braces first
+        cleaned = fix_double_braces(cleaned)
         
         # Remove markdown code blocks (```json ... ``` or ``` ... ```)
         if '```' in cleaned:
+            print("📝 Removing markdown code blocks...")
             parts = cleaned.split('```')
             for part in parts:
                 part = part.strip()
                 # Skip language identifiers like 'json'
-                if part and not part.lower() in ['json', 'javascript', 'js']:
+                if part and part.lower() not in ['json', 'javascript', 'js', '']:
                     if '{' in part:
-                        cleaned = part
+                        cleaned = fix_double_braces(part)
                         break
         
         # Find the JSON object
@@ -88,15 +104,33 @@ def extract_weaknesses_from_json(output_text: str) -> list:
             if start_idx != -1 and end_idx > start_idx:
                 json_str = cleaned[start_idx:end_idx]
                 
+                print(f"📄 Extracted JSON string: {json_str[:300]}...")
+                
                 # Try to parse JSON
                 try:
                     data = json.loads(json_str)
-                    print(f"✅ Successfully parsed JSON: {json.dumps(data, indent=2)[:300]}...")
+                    print(f"✅ Successfully parsed JSON")
+                    print(f"   Keys found: {list(data.keys())}")
                 except json.JSONDecodeError as e:
-                    print(f"⚠️ JSON parse error: {e}. Attempting fix...")
-                    # Try fixing common JSON issues
-                    json_str = json_str.replace("'", '"')  # Replace single quotes
-                    json_str = json_str.replace('\n', ' ')  # Remove newlines that break JSON
+                    print(f"⚠️ JSON parse error: {e}")
+                    print(f"   Attempting automatic fixes...")
+                    
+                    # Fix common issues
+                    fixes_applied = []
+                    
+                    # Replace single quotes with double quotes
+                    if "'" in json_str:
+                        json_str = json_str.replace("'", '"')
+                        fixes_applied.append("single quotes")
+                    
+                    # Remove newlines inside strings
+                    json_str = json_str.replace('\n', ' ')
+                    fixes_applied.append("newlines")
+                    
+                    # Remove any remaining control characters
+                    json_str = re.sub(r'[\x00-\x1f\x7f]', '', json_str)
+                    
+                    print(f"   Fixes applied: {', '.join(fixes_applied)}")
                     data = json.loads(json_str)
                     print(f"✅ Fixed and parsed JSON successfully")
                 
@@ -104,6 +138,8 @@ def extract_weaknesses_from_json(output_text: str) -> list:
                 if 'weaknesses' in data and isinstance(data['weaknesses'], list):
                     weaknesses = data['weaknesses']
                     print(f"✅ Found {len(weaknesses)} weaknesses in 'weaknesses' field")
+                    if weaknesses:
+                        print(f"   First weakness preview: {weaknesses[0][:100]}...")
                     return weaknesses
                     
                 # Sometimes the agent returns nested structure
@@ -111,6 +147,9 @@ def extract_weaknesses_from_json(output_text: str) -> list:
                     weaknesses = data['result']['weaknesses']
                     print(f"✅ Found {len(weaknesses)} weaknesses in 'result.weaknesses' field")
                     return weaknesses
+                
+                print(f"⚠️ JSON parsed but no 'weaknesses' field found")
+                print(f"   Available fields: {list(data.keys())}")
         
         # Fallback: Try to extract numbered/bulleted list if JSON parsing fails
         print(f"⚠️ No valid JSON found. Attempting fallback extraction...")
@@ -119,11 +158,12 @@ def extract_weaknesses_from_json(output_text: str) -> list:
         for line in lines:
             line = line.strip()
             # Look for numbered items (1., 2., etc.) or bullet points (-, *, etc.)
-            if line and (line[0].isdigit() or line.startswith(('-', '*', '•'))):
-                # Remove numbering/bullets
-                clean_line = line.lstrip('0123456789.-*• ').strip()
-                if len(clean_line) > 20:  # Only substantial weaknesses
-                    weaknesses.append(clean_line)
+            if line and len(line) > 0:
+                if line[0].isdigit() or line.startswith(('-', '*', '•', '–')):
+                    # Remove numbering/bullets
+                    clean_line = re.sub(r'^[\d\.\-\*\•\–\s]+', '', line).strip()
+                    if len(clean_line) > 20:  # Only substantial weaknesses
+                        weaknesses.append(clean_line)
         
         if weaknesses:
             print(f"✅ Fallback extraction found {len(weaknesses)} weaknesses")
@@ -201,7 +241,7 @@ def run_analysis(analysis_id: str, startup_data: StartupInput):
         
         for idx, task_output in enumerate(tasks_output):
             print(f"\n{'─'*80}")
-            print(f"Task {idx + 1}/{len(tasks_output)}")
+            print(f"Task {idx + 1}/{len(tasks_output)}: {task_order[idx][1] if idx < len(task_order) else 'Unknown'}")
             print(f"{'─'*80}")
             
             # Try multiple ways to get the output
